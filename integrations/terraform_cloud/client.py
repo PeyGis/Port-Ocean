@@ -1,7 +1,7 @@
 import httpx
 from typing import Any, AsyncGenerator, Optional
 from loguru import logger
-
+from port_ocean.context.event import event
 
 TERRAFORM_WEBHOOK_EVENTS = [
     "run:applying",
@@ -80,8 +80,14 @@ class TerraformClient:
     async def get_paginated_workspaces(
         self,
     ) -> AsyncGenerator[list[dict[str, Any]], None]:
-        page = 1
+        cache_key = "terraform-cloud-workspace"
+        if cache := event.attributes.get(cache_key):
+            logger.info("Retrieving workspaces data from cache")
+            yield cache
+            return
 
+        page = 1
+        all_workspaces = []
         organizations = await self.get_organizations()
         for organization in organizations:
             logger.info(f"Getting workspaces for {organization['id']}")
@@ -93,6 +99,8 @@ class TerraformClient:
                     query_params=params,
                 )
                 workspaces = response.get("data", [])
+                all_workspaces.extend(workspaces)
+                logger.info(f"Received {len(workspaces)} workspaces")
 
                 yield workspaces
 
@@ -100,6 +108,8 @@ class TerraformClient:
                     break
 
                 page += 1
+        event.attributes[cache_key] = all_workspaces
+        logger.info("Successfully retrieved workspaces for all organizations")
 
     async def get_paginated_runs_for_workspace(
         self, workspace_id: str
@@ -113,11 +123,13 @@ class TerraformClient:
                 endpoint=f"workspaces/{workspace_id}/runs", query_params=params
             )
             runs = response.get("data", [])
+            logger.info(f"Received {len(runs)} runs")
             yield runs
 
             if len(runs) < PAGE_SIZE:
                 break
             page += 1
+        logger.info("Successfully retrieved runs for all workspaces")
 
     async def get_paginated_state_version(
         self,
@@ -141,12 +153,14 @@ class TerraformClient:
                         endpoint="state-versions", query_params=params
                     )
                     state_versions = response.get("data", [])
+                    logger.info(f"Received {len(state_versions)} state versions")
                     yield state_versions
 
                     if len(state_versions) < PAGE_SIZE:
                         break
 
                     page += 1
+        logger.info("Successfully retrieved state versions for all workspaces")
 
     async def create_workspace_webhook(self, app_host: str) -> None:
         webhook_target_url = f"{app_host}/integration/webhook"
@@ -178,7 +192,9 @@ class TerraformClient:
                             }
                         }
                         await self.send_api_request(
-                            endpoint=notification_config_url, json_data=webhook_body
+                            endpoint=notification_config_url,
+                            method="POST",
+                            json_data=webhook_body,
                         )
                         logger.info(
                             f"Webhook created for Terraform workspace {workspace['id']}"
