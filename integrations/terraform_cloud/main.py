@@ -32,7 +32,7 @@ def init_terraform_client() -> TerraformClient:
 async def enrich_state_versions_with_output_data(
     http_client: TerraformClient, state_versions: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    async with asyncio.BoundedSemaphore(50):
+    async with asyncio.BoundedSemaphore(30):
         tasks = [
             http_client.get_state_version_output(state_version["id"])
             for state_version in state_versions
